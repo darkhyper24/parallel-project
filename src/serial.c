@@ -1,29 +1,42 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <ctype.h>
+#include <time.h>
 
-int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        printf("Usage: %s <input_file>\n", argv[0]);
-        return 1;
-    }
+int main() {
+    const char *filename = "../data/small.txt"; //this is the path for the data file
 
-    FILE *file = fopen(argv[1], "r");
+    FILE *file = fopen(filename, "r");
     if (!file) {
         perror("Error opening file");
         return 1;
     }
 
-    char word[100];
-    int word_count = 0;
+    clock_t start = clock();
 
-    while (fscanf(file, "%99s", word) == 1) {
-        word_count++;
+    int in_word = 0;
+    long word_count = 0;
+    char ch;
+
+    while ((ch = fgetc(file)) != EOF) {
+        if (isspace(ch)) {
+            if (in_word) {
+                in_word = 0;
+            }
+        } else if (!in_word) {
+            in_word = 1;
+            word_count++;
+        }
     }
+
+    clock_t end = clock();
+    double time_taken = (double)(end - start) / CLOCKS_PER_SEC;
 
     fclose(file);
 
-    printf("Total words: %d\n", word_count);
+    printf(" File: %s\n", filename);
+    printf("Total words: %ld\n", word_count);
+    printf("Execution time: %.6f seconds\n", time_taken);
+
     return 0;
 }
