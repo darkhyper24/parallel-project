@@ -12,14 +12,14 @@ void printUsage(const char *progName)
 {
     printf("Usage: %s <filename> <runs>\n", progName);
     printf("  <filename> : Path to the input file (default: ../data/large.txt)\n");
-    printf("  <runs>     : Number of runs to perform (default: 50)\n");
+    printf("  <runs>     : Number of runs to perform (default: 100)\n");
 }
 
 int main(int argc, char *argv[])
 {
 
     char *filename = "../data/large.txt"; // Adjust path if needed
-    int RUNS = 50;
+    int RUNS = 100;
     if (argc > 1)
     {
         if (argc == 2 && strcmp(argv[1], "-h") == 0)
@@ -42,16 +42,18 @@ int main(int argc, char *argv[])
         }
     }
 
-    double min = 0.0;
-    double max = 0.0;
-    double sum = 0.0;
-    double avg = 0.0;
     double *times = malloc(sizeof(double) * RUNS);
+    if (!times)
+    {
+        perror("malloc times");
+        return 1;
+    }
 
     FILE *file = fopen(filename, "rb");
     if (!file)
     {
         perror("Error opening file");
+        free(times);
         return 1;
     }
 
@@ -59,6 +61,7 @@ int main(int argc, char *argv[])
     {
         perror("fseek");
         fclose(file);
+        free(times);
         return 1;
     }
     long file_size = ftell(file);
@@ -66,6 +69,7 @@ int main(int argc, char *argv[])
     {
         perror("ftell");
         fclose(file);
+        free(times);
         return 1;
     }
     rewind(file);
@@ -75,6 +79,7 @@ int main(int argc, char *argv[])
     {
         perror("malloc");
         fclose(file);
+        free(times);
         return 1;
     }
 
@@ -82,61 +87,76 @@ int main(int argc, char *argv[])
     buf[read] = '\0';
     fclose(file);
 
-    long long total_words = 0;
-    int nthreads = 1;
-    for (int count = 0; count < RUNS; count++)
+    int thread_counts[] = {1, 2, 4, 8};
+    int num_thread_counts = sizeof(thread_counts) / sizeof(thread_counts[0]);
+
+    long long baseline_words = -1;
+
+    for (int tc = 0; tc < num_thread_counts; ++tc)
     {
-        total_words = 0;
-        double t0 = omp_get_wtime();
-#pragma omp parallel
+        int tcount = thread_counts[tc];
+        long long total_words = 0;
+        int reported_threads = tcount;
+
+        for (int run = 0; run < RUNS; ++run)
         {
-            int tid = omp_get_thread_num();
-            int nth = omp_get_num_threads();
-#pragma omp single
-            nthreads = nth;
+            double t0 = omp_get_wtime();
+            long long run_words = 0;
 
-            size_t chunk = (read + nth - 1) / nth; // ceil division
-            size_t start = tid * chunk;
-            size_t end = start + chunk;
-            if (end > read)
-                end = read;
-
-            long long local_count = 0;
-            for (size_t i = start; i < end; ++i)
+#pragma omp parallel num_threads(tcount) reduction(+ : run_words)
             {
-                unsigned char c = (unsigned char)buf[i];
-                if (!isspace(c))
+                int tid = omp_get_thread_num();
+                int nth = omp_get_num_threads();
+#pragma omp single
+                reported_threads = nth;
+
+                size_t chunk = (read + nth - 1) / nth; // ceil division
+                size_t start = (size_t)tid * chunk;
+                size_t end = start + chunk;
+                if (end > read)
+                    end = read;
+
+                long long local_count = 0;
+                for (size_t i = start; i < end; ++i)
                 {
-                    if (i == 0)
+                    unsigned char c = (unsigned char)buf[i];
+                    if (!isspace(c))
                     {
-                        local_count++;
-                    }
-                    else if (isspace((unsigned char)buf[i - 1]))
-                    {
-                        local_count++;
+                        if (i == 0 || isspace((unsigned char)buf[i - 1]))
+                        {
+                            local_count++;
+                        }
                     }
                 }
+                run_words += local_count;
             }
 
-#pragma omp atomic
-            total_words += local_count;
+            double t1 = omp_get_wtime();
+            times[run] = t1 - t0;
+
+            if (baseline_words == -1)
+                baseline_words = run_words;
+            else if (run_words != baseline_words)
+                fprintf(stderr, "Warning: word count mismatch (expected %lld, got %lld) for threads=%d run=%d\n",
+                        baseline_words, run_words, tcount, run);
+
+            total_words = run_words;
         }
 
-        double t1 = omp_get_wtime();
-        times[count] = t1 - t0;
-    }
-    max = getMax(times, RUNS);
-    min = getMin(times, RUNS);
-    sum = getSum(times, RUNS);
-    avg = sum / RUNS;
+        double max = getMax(times, RUNS);
+        double min = getMin(times, RUNS);
+        double sum = getSum(times, RUNS);
+        double avg = sum / RUNS;
 
-    printf("✅ File: %s\n", filename);
-    printf("Total words: %lld\n", total_words);
-    printf("Threads: %d\n", nthreads);
-    printf("max time: %.6f seconds\n", max);
-    printf("min time: %.6f seconds\n", min);
-    printf("avg time: %.6f seconds\n", avg);
-    printf("num of runs: %d\n", RUNS);
+        printf("✅ File: %s\n", filename);
+        printf("Total words: %lld\n", total_words);
+        printf("Threads: %d\n", reported_threads);
+        printf("max time: %.6f seconds\n", max);
+        printf("min time: %.6f seconds\n", min);
+        printf("avg time: %.6f seconds\n", avg);
+        printf("num of runs: %d\n\n", RUNS);
+    }
+
     free(buf);
     free(times);
     return 0;
