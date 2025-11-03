@@ -13,6 +13,7 @@ void printUsage(const char *progName)
     printf("Usage: %s <filename> <runs>\n", progName);
     printf("  <filename> : Path to the input file (default: ../data/large.txt)\n");
     printf("  <runs>     : Number of runs to perform (default: 100)\n");
+    printf("<strides>  : Stride value for character processing (default: 1)\n");
 }
 
 int main(int argc, char *argv[])
@@ -20,6 +21,8 @@ int main(int argc, char *argv[])
 
     char *filename = "../data/large.txt"; // Adjust path if needed
     int RUNS = 100;
+    int stride = 1;
+
     if (argc > 1)
     {
         if (argc == 2 && strcmp(argv[1], "-h") == 0)
@@ -38,6 +41,15 @@ int main(int argc, char *argv[])
             {
                 fprintf(stderr, "Invalid number of RUNS specified. Using default 50.\n");
                 RUNS = 50;
+            }
+        }
+        if (argc >= 4)
+        {
+            stride = atoi(argv[3]);
+            if (stride <= 0)
+            {
+                fprintf(stderr, "Invalid stride value. Using 1.\n");
+                stride = 1;
             }
         }
     }
@@ -117,7 +129,7 @@ int main(int argc, char *argv[])
                     end = read;
 
                 long long local_count = 0;
-                for (size_t i = start; i < end; ++i)
+                for (size_t i = start; i < end; i += stride)
                 {
                     unsigned char c = (unsigned char)buf[i];
                     if (!isspace(c))
