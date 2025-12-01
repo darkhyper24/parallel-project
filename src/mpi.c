@@ -4,7 +4,7 @@
 #include <string.h>
 #include <mpi.h>
 
-#define MAX_SEND_CHUNK 1000000 // 1 MB per chunk
+#define MAX_SEND_CHUNK 1000000
 
 double getMax(const double *arr, int n);
 double getMin(const double *arr, int n);
@@ -25,10 +25,77 @@ int main(int argc, char *argv[])
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
+    if (size < 2)
+    {
+        if (rank == 0)
+            printf("Running in single-process mode. Skipping latency/bandwidth tests.\n");
+    }
+    else
+    {
+        MPI_Barrier(MPI_COMM_WORLD);
+        int msg = 42;
+        MPI_Status st;
+        double t0, t1;
+
+        if (rank == 0)
+        {
+            t0 = MPI_Wtime();
+            MPI_Send(&msg, 1, MPI_INT, 1, 100, MPI_COMM_WORLD);
+            MPI_Recv(&msg, 1, MPI_INT, 1, 100, MPI_COMM_WORLD, &st);
+            t1 = MPI_Wtime();
+
+            double round_trip = t1 - t0;
+            double latency = round_trip / 2.0;
+
+            printf("=== LATENCY TEST ===\n");
+            printf("Round trip time  : %.9f seconds\n", round_trip);
+            printf("Latency (1-way)  : %.9f seconds\n\n", latency);
+        }
+        else if (rank == 1)
+        {
+            MPI_Recv(&msg, 1, MPI_INT, 0, 100, MPI_COMM_WORLD, &st);
+            MPI_Send(&msg, 1, MPI_INT, 0, 100, MPI_COMM_WORLD);
+        }
+
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        long MESSAGE_SIZE = 50 * 1024 * 1024; // 50 MB
+        char *buffer = malloc(MESSAGE_SIZE);
+
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        double t0_bw, t1_bw;
+
+        if (rank == 0)
+        {
+            t0_bw = MPI_Wtime();
+            MPI_Send(buffer, MESSAGE_SIZE, MPI_CHAR, 1, 200, MPI_COMM_WORLD);
+            MPI_Recv(buffer, MESSAGE_SIZE, MPI_CHAR, 1, 200, MPI_COMM_WORLD, &st);
+            t1_bw = MPI_Wtime();
+
+            double round_trip = t1_bw - t0_bw;
+            double one_way = round_trip / 2.0;
+            double bandwidth = (MESSAGE_SIZE / one_way) / (1024.0 * 1024.0);
+
+            printf("=== BANDWIDTH TEST ===\n");
+            printf("Message size: %ld bytes\n", MESSAGE_SIZE);
+            printf("Round trip time   : %.6f s\n", round_trip);
+            printf("One-way time      : %.6f s\n", one_way);
+            printf("Bandwidth         : %.2f MB/s\n\n", bandwidth);
+        }
+        else if (rank == 1)
+        {
+            MPI_Recv(buffer, MESSAGE_SIZE, MPI_CHAR, 0, 200, MPI_COMM_WORLD, &st);
+            MPI_Send(buffer, MESSAGE_SIZE, MPI_CHAR, 0, 200, MPI_COMM_WORLD);
+        }
+
+        free(buffer);
+        MPI_Barrier(MPI_COMM_WORLD);
+    }
+
     char *filename = "../data/medium.txt";
     int RUNS = 100;
 
-    // Parse command line arguments
     if (argc > 1)
     {
         if (argc == 2 && strcmp(argv[1], "-h") == 0)
@@ -52,7 +119,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    // Step 1: Rank 0 reads the entire file
     char *global_buf = NULL;
     long file_size = 0;
     if (rank == 0)
@@ -82,10 +148,8 @@ int main(int argc, char *argv[])
         fclose(file);
     }
 
-    // Step 2: Broadcast file size to all ranks
     MPI_Bcast(&file_size, 1, MPI_LONG, 0, MPI_COMM_WORLD);
 
-    // Step 3: Calculate domain decomposition (1D block split)
     long chunk_size = file_size / size;
     long remainder = file_size % size;
     long my_start, my_size;
@@ -100,7 +164,6 @@ int main(int argc, char *argv[])
         my_start = rank * chunk_size + remainder;
     }
 
-    // Allocate local buffer
     char *local_buf = malloc((size_t)my_size + 1);
     if (!local_buf)
     {
@@ -159,7 +222,6 @@ int main(int argc, char *argv[])
         printf("Running %d iterations...\n\n", RUNS);
     }
 
-    // Allocate timing array
     double *times = malloc(sizeof(double) * RUNS);
     if (!times)
     {
@@ -169,7 +231,6 @@ int main(int argc, char *argv[])
 
     long long baseline_words = -1;
 
-    // Step 5: Word counting with halo
     for (int run = 0; run < RUNS; run++)
     {
         MPI_Barrier(MPI_COMM_WORLD);
@@ -179,19 +240,16 @@ int main(int argc, char *argv[])
         MPI_Request send_requests[2], recv_requests[2];
         int num_send_reqs = 0, num_recv_reqs = 0;
 
-        // Post halo receives
         if (rank > 0)
             MPI_Irecv(&left_halo, 1, MPI_CHAR, rank - 1, 1, MPI_COMM_WORLD, &recv_requests[num_recv_reqs++]);
         if (rank < size - 1)
             MPI_Irecv(&right_halo, 1, MPI_CHAR, rank + 1, 1, MPI_COMM_WORLD, &recv_requests[num_recv_reqs++]);
 
-        // Post halo sends
         if (rank > 0)
             MPI_Isend(&local_buf[0], 1, MPI_CHAR, rank - 1, 1, MPI_COMM_WORLD, &send_requests[num_send_reqs++]);
         if (rank < size - 1)
             MPI_Isend(&local_buf[my_size - 1], 1, MPI_CHAR, rank + 1, 1, MPI_COMM_WORLD, &send_requests[num_send_reqs++]);
 
-        // Compute interior
         long long interior_count = 0;
         for (long i = 1; i < my_size; i++)
         {
@@ -199,11 +257,9 @@ int main(int argc, char *argv[])
                 interior_count++;
         }
 
-        // Wait halo receives
         if (num_recv_reqs > 0)
             MPI_Waitall(num_recv_reqs, recv_requests, MPI_STATUSES_IGNORE);
 
-        // Compute boundaries
         long long boundary_count = 0;
         if (my_size > 0)
         {
@@ -214,7 +270,6 @@ int main(int argc, char *argv[])
 
         long long local_count = interior_count + boundary_count;
 
-        // Global reduction
         long long global_count = 0;
         MPI_Reduce(&local_count, &global_count, 1, MPI_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
 
@@ -233,7 +288,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    // Statistics
     if (rank == 0)
     {
         double max = getMax(times, RUNS);
